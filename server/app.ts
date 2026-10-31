@@ -422,10 +422,25 @@ export async function createApp(db:DB,config:{encryptionKey:string;appUrl:string
   });
   app.post('/api/accounts',async req=>{
     const d=z.object({email,label:z.string().max(100).default('')}).parse(req.body);
-    const [existing]=await db.query('SELECT * FROM accounts WHERE email=$1',[d.email]);
-    if(existing) {assert(existing.owner_id===req.user.id,'该账号已存在，请联系管理员核对归属',409);return {account:existing};}
-    const [account]=await db.query('INSERT INTO accounts(id,owner_id,submitted_by,email,label) VALUES($1,$2,$2,$3,$4) RETURNING *',[id(),req.user.id,d.email,d.label]);
-    await audit(db,req.user.id,'account.create',account.id);return {account};
+    return db.transaction(async tx=>{
+      const [existing]=await tx.query(`SELECT *,created_at<=now()-interval '15 minutes' AS recovery_stale
+        FROM accounts WHERE email=$1 FOR UPDATE`,[d.email]);
+      if(existing) {
+        if(existing.owner_id===req.user.id)return {account:existing};
+        const [binding]=await tx.query('SELECT id FROM bindings WHERE account_id=$1 LIMIT 1',[existing.id]);
+        const [attempt]=await tx.query(`SELECT id FROM oauth_attempts
+          WHERE account_id=$1 AND state IN ('pending','exchanging') AND expires_at>now() LIMIT 1`,[existing.id]);
+        const [job]=await tx.query(`SELECT id FROM jobs WHERE subject_id=$1 AND state IN ('queued','running') LIMIT 1`,[existing.id]);
+        const recoverable=!existing.ownership_verified && existing.recovery_stale && !existing.proxy_id && !binding && !attempt && !job;
+        assert(recoverable,'该账号已存在，请联系管理员核对归属',409);
+        const [account]=await tx.query(`UPDATE accounts SET owner_id=$2,submitted_by=$2,label=$3
+          WHERE id=$1 RETURNING *`,[existing.id,req.user.id,d.label]);
+        await audit(tx,req.user.id,'account.create',account.id,{recovered:true});
+        return {account};
+      }
+      const [account]=await tx.query('INSERT INTO accounts(id,owner_id,submitted_by,email,label) VALUES($1,$2,$2,$3,$4) RETURNING *',[id(),req.user.id,d.email,d.label]);
+      await audit(tx,req.user.id,'account.create',account.id);return {account};
+    });
   });
   app.delete('/api/accounts/:id',async req=>{
     const accountId=identifier.parse((req.params as Row).id);
