@@ -1032,7 +1032,7 @@
   "待核实归属": "Ownership pending verification",
   "核实归属": "Verify ownership",
   "通过 CCMAX 完成授权并核对真实邮箱后，账号自动归属提交成员。待授权账号保留成员记录；来源不明的同步账号需管理员核实分配。": "Accounts are automatically assigned to the submitting member after authorization and email verification in CCMAX. Pending accounts retain their member record; synced accounts with unknown ownership need administrator review and assignment.",
-  "平台 A 启停需要上游管理员权限；权限不足时会显示原因，可通过重新授权修复登录凭据。": "Enabling or disabling Platform A requires upstream administrator access. Permission errors are shown; reauthorize to repair login credentials.",
+  "平台 A 主账号有管理员权限时同步上游状态；权限不足时同一按钮仅暂停或恢复 CCMAX 使用。": "When the Platform A master is an administrator, status changes are synchronized upstream. Otherwise, the same button only pauses or resumes usage in CCMAX.",
   "{0} 目标状态": "{0} target status",
   "上游原账号不存在或邮箱不一致，请管理员同步核对；未覆盖其他账号": "The original upstream account is missing or its email differs. Ask an administrator to sync and verify; no other account was overwritten.",
   "上游尚未确认目标账号状态，请同步核对；本地未提前修改状态": "The upstream has not confirmed the requested account status. Sync and verify; the local status has not been changed.",

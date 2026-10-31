@@ -127,7 +127,7 @@ KeyMan 验证失败时仍会加密保存连接，创建或编辑响应包含 `ve
 
 任务可能为 `queued`、`running`、`succeeded`、`failed`、`needs_attention`。只有 `succeeded` 表示完成；`needs_attention` 先人工核对上游，不能直接重复提交。代理固定绑定、每个平台配置和旧账号归属核对规则与网站完全一致，平台 C 使用服务端固定默认配置。
 
-`GET /api/proxies` 仅返回调用者本人添加的代理，不包含上级、下级、兄弟或其他成员的代理；管理员也按本人范围返回。代理修改和账号绑定只能操作本人的代理及本人账号。团队账号列表仅保留其他成员账号是否已绑定代理、是否启用及各平台是否同步的状态，不暴露其代理 ID、名称或出口。一个账号固定绑定一条代理，同一代理不能重复占用。账号返回 `proxy_bound`、`proxy_sync_state`、`proxy_sync_error`，各平台绑定返回 `proxy_verified` 和 `usage_enabled`；可据此显示同步进度和失败原因。`POST /api/bindings/:id/local-status` 只允许平台管理员对平台 A 绑定暂停或恢复 CCMAX 内使用，不修改上游状态。
+`GET /api/proxies` 仅返回调用者本人添加的代理，不包含上级、下级、兄弟或其他成员的代理；管理员也按本人范围返回。代理修改和账号绑定只能操作本人的代理及本人账号。团队账号列表仅保留其他成员账号是否已绑定代理、是否启用及各平台是否同步的状态，不暴露其代理 ID、名称或出口。一个账号固定绑定一条代理，同一代理不能重复占用。账号返回 `proxy_bound`、`proxy_sync_state`、`proxy_sync_error`，各平台绑定返回 `proxy_verified` 和 `usage_enabled`；可据此显示同步进度和失败原因。`POST /api/bindings/:id/status` 在平台 A 主账号具有管理员权限时修改上游状态；权限不足时，停用自动改为暂停 CCMAX 内使用，之后通过同一接口启用即可恢复。`POST /api/bindings/:id/local-status` 仍可由已核实账号本人或平台管理员显式暂停或恢复 CCMAX 内使用，不修改上游状态。
 
 `POST /api/accounts/:id/proxy/sync` 提交 `{key}`，可在账号层统一重试代理同步；返回 `{jobs,reauthorizeConnectionIds}`，已有执行中的任务不会重复排队。旧的逐平台同步接口保留兼容。启用 平台 B / C / D 已有账号时，如尚未同步代理，服务端会先核对账号身份、自动应用并读回固定代理，再启用；失败会保留未核实状态。平台 A 旧绑定需重新授权时不会假报同步成功。
 

@@ -217,10 +217,21 @@ export function createWorker(db:DB,box:SecretBox,clientFactory=(p:ProviderKey,c:
           }
         }
         await client.verifySubmissionTarget(binding.external_id,binding.email);
-        await client.setEnabled(binding.external_id,payload.enabled);
-        await client.verifyAccountStatus(binding.external_id,binding.email,payload.enabled);
-        await db.query('UPDATE bindings SET status=$2 WHERE id=$1',[binding.id,payload.enabled?'active':'disabled']);
-        result={enabled:payload.enabled};
+        const localOnly=connection.provider==='gatelink'&&(
+          (!payload.enabled&&client.user?.role!=='admin')||
+          (payload.enabled&&binding.local_enabled===false&&binding.status==='active')
+        );
+        if(localOnly) {
+          await db.transaction(async tx=>{
+            await tx.query('UPDATE bindings SET local_enabled=$2 WHERE id=$1',[binding.id,payload.enabled]);
+            await audit(tx,actor.id,'binding.local_status',binding.id,{enabled:payload.enabled,provider:connection.provider,automatic:true});
+          });
+        } else {
+          await client.setEnabled(binding.external_id,payload.enabled);
+          await client.verifyAccountStatus(binding.external_id,binding.email,payload.enabled);
+          await db.query('UPDATE bindings SET status=$2,local_enabled=CASE WHEN $3 THEN true ELSE local_enabled END WHERE id=$1',[binding.id,payload.enabled?'active':'disabled',payload.enabled]);
+        }
+        result={enabled:payload.enabled,...(localOnly?{localOnly:true}:{})};
       } else if(job.kind==='billing_snapshot') {
         assert(actor.role==='owner','仅管理员可以同步共享主账号');
         const bindings=await db.query('SELECT b.id,b.external_id,a.email FROM bindings b JOIN accounts a ON a.id=b.account_id WHERE b.connection_id=$1',[connection.id]);

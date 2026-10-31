@@ -17,7 +17,7 @@ test('platform account management shows personal prices, retains failed state ch
   const privateProxy=await page.request.post('/api/proxies',{headers:{'x-ccmax-request':'1'},data:{name:'Owner private proxy',url:'http://owner-private.proxy.example.com:8080'}});expect(privateProxy.ok()).toBe(true);
   for(const [provider,rate] of [['平台 A','0.5000'],['平台 B','0.6000'],['平台 C','0.7000']])await expect(dialog.getByRole('region',{name:provider,exact:true}).locator('.account-platform-price .rate-value')).toHaveText(`× ${rate}`);
   const accounts=(await(await page.request.get('/api/accounts')).json()).accounts,account=accounts.find((value:any)=>value.email==='claude-fixture@example.com');
-  const ai=account.bindings.find((value:any)=>value.provider==='B');
+  const ai=account.bindings.find((value:any)=>value.provider==='B'),gate=account.bindings.find((value:any)=>value.provider==='A');
   const stateJob=randomUUID();let failState=false;
   await page.route('**/api/jobs',route=>route.fulfill({json:{jobs:failState?[{id:stateJob,kind:'set_enabled',state:'needs_attention',error:'上游尚未确认目标账号状态，请同步核对；本地未提前修改状态'}]:[]}}));
   await page.route(`**/api/bindings/${ai.id}/status`,route=>{failState=true;return route.fulfill({json:{id:stateJob,state:'queued'}});});
@@ -40,7 +40,21 @@ test('platform account management shows personal prices, retains failed state ch
   await dialog.getByRole('button',{name:'允许上号',exact:true}).click();await expect(dialog.getByRole('region',{name:'平台 B',exact:true}).getByRole('button',{name:'重新授权',exact:true})).toBeEnabled();
   await expect(dialog).not.toContainText('private-upstream-');
   for(const badge of await dialog.locator('.account-platform-price .rate-value').all())await expect(badge).toHaveText('× 0.1000');
-  await expect(dialog.getByRole('region',{name:'平台 A',exact:true})).toContainText('上游管理员权限');
+  const gateCard=dialog.getByRole('region',{name:'平台 A',exact:true}),gateJob=randomUUID();let gatePaused=false;
+  const accountPayload=await(await page.request.get('/api/accounts')).json();
+  await page.route('**/api/accounts',route=>{
+    if(route.request().method()!=='GET')return route.continue();
+    const payload=structuredClone(accountPayload),target=payload.accounts.find((value:any)=>value.id===account.id);
+    target.bindings.find((value:any)=>value.id===gate.id).usage_enabled=!gatePaused;
+    return route.fulfill({json:payload});
+  });
+  await page.route('**/api/jobs',route=>route.fulfill({json:{jobs:[{id:gateJob,kind:'set_enabled',state:'succeeded',connection_id:gate.connection_id,provider:'A'}]}}));
+  await page.route(`**/api/bindings/${gate.id}/status`,route=>{gatePaused=!route.request().postDataJSON().enabled;return route.fulfill({json:{id:gateJob,state:'queued'}});});
+  await expect(gateCard).toContainText('权限不足时同一按钮仅暂停或恢复 CCMAX 使用');
+  await gateCard.getByRole('button',{name:'停用',exact:true}).click();
+  await expect(gateCard.getByRole('button',{name:'启用',exact:true})).toBeVisible();
+  await gateCard.getByRole('button',{name:'启用',exact:true}).click();
+  await expect(gateCard.getByRole('button',{name:'停用',exact:true})).toBeVisible();
   await page.screenshot({path:'test-results/account-management-desktop.png',fullPage:true});
   await page.setViewportSize({width:390,height:844});expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);await page.screenshot({path:'test-results/account-management-mobile.png',fullPage:true});
   await page.setViewportSize({width:1280,height:900});

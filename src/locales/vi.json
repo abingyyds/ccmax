@@ -1032,7 +1032,7 @@
   "待核实归属": "Chờ xác minh chủ sở hữu",
   "核实归属": "Xác minh chủ sở hữu",
   "通过 CCMAX 完成授权并核对真实邮箱后，账号自动归属提交成员。待授权账号保留成员记录；来源不明的同步账号需管理员核实分配。": "Tài khoản tự động thuộc về thành viên đã gửi sau khi cấp quyền và xác minh email thực trong CCMAX. Tài khoản chờ cấp quyền vẫn lưu thành viên; tài khoản đồng bộ chưa rõ chủ sở hữu cần quản trị viên xác minh và phân bổ.",
-  "平台 A 启停需要上游管理员权限；权限不足时会显示原因，可通过重新授权修复登录凭据。": "Bật hoặc tắt Nền tảng A cần quyền quản trị ở nền tảng gốc. Lỗi quyền sẽ được hiển thị; hãy cấp quyền lại để sửa thông tin đăng nhập.",
+  "平台 A 主账号有管理员权限时同步上游状态；权限不足时同一按钮仅暂停或恢复 CCMAX 使用。": "Khi tài khoản chính của Nền tảng A là quản trị viên, thay đổi trạng thái sẽ được đồng bộ lên nền tảng gốc. Nếu không, cùng nút này chỉ tạm dừng hoặc tiếp tục sử dụng trong CCMAX.",
   "{0} 目标状态": "Trạng thái đích của {0}",
   "上游原账号不存在或邮箱不一致，请管理员同步核对；未覆盖其他账号": "Không tìm thấy tài khoản gốc hoặc email không khớp. Nhờ quản trị viên đồng bộ và kiểm tra; chưa ghi đè tài khoản khác.",
   "上游尚未确认目标账号状态，请同步核对；本地未提前修改状态": "Nền tảng gốc chưa xác nhận trạng thái yêu cầu. Hãy đồng bộ và kiểm tra; trạng thái nội bộ chưa thay đổi.",

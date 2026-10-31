@@ -256,6 +256,51 @@ describe('owned platform account recovery',()=>{
     expect((await db.query('SELECT state,error FROM jobs WHERE id=$1',[job.json().id]))[0]).toMatchObject({state:'needs_attention',error:expect.stringContaining('邮箱不一致')});
   });
 
+  it('uses the normal Platform A status action to pause and resume locally when the upstream master is not an administrator',async()=>{
+    const {binding}=await platform('gatelink');
+    await db.query("UPDATE bindings SET status='active',proxy_id=$2 WHERE id=$1",[binding.id,proxyId]);
+    let upstreamStatusWrites=0;
+    const worker=createWorker(db,box,(provider,credentials)=>new ProviderClient(provider,credentials,async(input,init={})=>{
+      const path=new URL(String(input)).pathname;
+      if(path==='/api/auth/login')return Response.json({csrfToken:'csrf',user:{role:'agent'}});
+      if(path==='/api/submissions')return Response.json({items:[{id:binding.external_id,upstreamEmail:account.email,upstreamStatus:'active',upstreamDailyCost:'123.45'}],total:1,totalPages:1});
+      if(path.endsWith('/enabled')){upstreamStatusWrites++;return Response.json({});}
+      throw new Error(`Unexpected Platform A request: ${path} ${init.method}`);
+    }));
+
+    const disabled=await call('POST',`/api/bindings/${binding.id}/status`,{enabled:false,key:id()});
+    expect(disabled.statusCode).toBe(200);await worker.runOne();
+    expect((await db.query('SELECT status,local_enabled FROM bindings WHERE id=$1',[binding.id]))[0]).toMatchObject({status:'active',local_enabled:false});
+    expect((await db.query('SELECT state,result,error FROM jobs WHERE id=$1',[disabled.json().id]))[0]).toMatchObject({state:'succeeded',result:{enabled:false,localOnly:true},error:null});
+    expect((await call('GET','/api/accounts')).json().accounts[0].bindings[0].usage_enabled).toBe(false);
+
+    const enabled=await call('POST',`/api/bindings/${binding.id}/status`,{enabled:true,key:id()});
+    expect(enabled.statusCode).toBe(200);await worker.runOne();
+    expect((await db.query('SELECT status,local_enabled FROM bindings WHERE id=$1',[binding.id]))[0]).toMatchObject({status:'active',local_enabled:true});
+    expect((await db.query('SELECT state,result,error FROM jobs WHERE id=$1',[enabled.json().id]))[0]).toMatchObject({state:'succeeded',result:{enabled:true,localOnly:true},error:null});
+    expect(upstreamStatusWrites).toBe(0);
+  });
+
+  it('keeps the normal Platform A status action upstream when the master is an administrator',async()=>{
+    const {binding}=await platform('gatelink');
+    await db.query("UPDATE bindings SET status='active',proxy_id=$2 WHERE id=$1",[binding.id,proxyId]);
+    let remoteStatus='active',upstreamStatusWrites=0;
+    const worker=createWorker(db,box,(provider,credentials)=>new ProviderClient(provider,credentials,async(input,init={})=>{
+      const path=new URL(String(input)).pathname,body=init.body?JSON.parse(String(init.body)):{};
+      if(path==='/api/auth/login')return Response.json({csrfToken:'csrf',user:{role:'admin'}});
+      if(path==='/api/submissions')return Response.json({items:[{id:binding.external_id,upstreamEmail:account.email,upstreamStatus:remoteStatus,upstreamDailyCost:'123.45'}],total:1,totalPages:1});
+      if(path.endsWith('/enabled')){upstreamStatusWrites++;remoteStatus=body.enabled?'active':'disabled';return Response.json({});}
+      throw new Error(`Unexpected Platform A request: ${path} ${init.method}`);
+    }));
+
+    const disabled=await call('POST',`/api/bindings/${binding.id}/status`,{enabled:false,key:id()});
+    expect(disabled.statusCode).toBe(200);await worker.runOne();
+    expect((await db.query('SELECT status,local_enabled FROM bindings WHERE id=$1',[binding.id]))[0]).toMatchObject({status:'disabled',local_enabled:true});
+    const [job]=await db.query('SELECT state,result,error FROM jobs WHERE id=$1',[disabled.json().id]);
+    expect(job).toMatchObject({state:'succeeded',result:{enabled:false},error:null});expect(job.result).not.toHaveProperty('localOnly');
+    expect(upstreamStatusWrites).toBe(1);
+  });
+
   it('binds once, automatically synchronizes all supported legacy platforms and preserves money and ownership',async()=>{
     const platforms=await Promise.all((['ai008','minicc','gatelink'] as const).map(platform));
     for(const {binding} of platforms)await db.transaction(tx=>ingestUsage(tx,{bindingId:binding.id,day:'2021-01-01',rawUsd:'100',final:true,source:'verified-proxy-test'}));
