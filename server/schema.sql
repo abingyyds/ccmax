@@ -71,6 +71,7 @@ CREATE TABLE bindings (
   cost_30d numeric(24,8),
   utilization numeric(8,3),
   last_seen_at timestamptz NOT NULL DEFAULT now(),
+  created_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE(connection_id,external_id),
   UNIQUE(account_id,connection_id)
 );

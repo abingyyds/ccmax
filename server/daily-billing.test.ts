@@ -59,15 +59,46 @@ describe('automatic daily billing',()=>{
     expect((await balance(db,leaf.id)).available).toBe('10.00000000');
   });
 
+  it('waits for every eligible platform day before creating automatic invoices',async()=>{
+    const [second]=await db.query("INSERT INTO connections(id,provider,name,credentials,payout_rate,created_at) VALUES($1,'ai008','Second upstream',$2,0.3,$3) RETURNING *",[id(),box.encrypt({username:'fixture',password:'fixture'}),day+'T00:00:00+08:00']);
+    await db.query('INSERT INTO connection_rates(id,connection_id,rate,effective_date) VALUES($1,$2,0.3,$3)',[id(),second.id,day]);
+    const accountId=id(),secondBinding=id();
+    await db.query('INSERT INTO accounts(id,owner_id,email,ownership_verified,created_at) VALUES($1,$2,$3,true,$4)',[accountId,leaf.id,'second@claude.test',day+'T00:00:00+08:00']);
+    await db.query('INSERT INTO bindings(id,account_id,connection_id,external_id) VALUES($1,$2,$3,$4)',[secondBinding,accountId,second.id,'second']);
+    await db.query('INSERT INTO billing_days(connection_id,day) VALUES($1,$2)',[second.id,day]);
+
+    const first=await recordDailyStatement(db,connection,owner,day,[{externalId:'real',rawUsd:'100'}]);
+    expect(first.invoices).toBe(0);
+    expect(await db.query('SELECT * FROM invoices')).toHaveLength(0);
+
+    const complete=await recordDailyStatement(db,second,owner,day,[{externalId:'second',rawUsd:'50'}]);
+    expect(complete.invoices).toBe(3);
+    expect(await db.query('SELECT * FROM invoice_items')).toHaveLength(6);
+  });
+
+  it('blocks a partial statement when an already-connected verified account is absent',async()=>{
+    await db.query('ALTER TABLE bindings ADD COLUMN IF NOT EXISTS created_at timestamptz NOT NULL DEFAULT now()');
+    await db.query('UPDATE bindings SET created_at=$2 WHERE id=$1',[binding.id,day+'T00:00:00+08:00']);
+    const missing=await account('missing',leaf.id);
+    await db.query('UPDATE bindings SET created_at=$2 WHERE id=$1',[missing.id,day+'T00:00:00+08:00']);
+
+    const result=await recordDailyStatement(db,connection,owner,day,[{externalId:'real',rawUsd:'100'}]);
+
+    expect(result).toMatchObject({state:'needs_attention',invoices:0,issueCount:1});
+    expect(await db.query('SELECT * FROM invoices')).toHaveLength(0);
+    expect(await db.query("SELECT external_id,state FROM billing_entries WHERE external_id='missing'"))
+      .toEqual([{external_id:'missing',state:'blocked'}]);
+  });
+
   it('archives unassigned accounts and missing prices while settling unrelated accounts, then retries without duplicate invoices',async()=>{
     const unassigned=await account('unassigned',null,false);
     const input=[{externalId:'real',rawUsd:'100'},{externalId:'unassigned',rawUsd:'10'}];
     const first=await recordDailyStatement(db,connection,owner,day,input);
-    expect(first).toMatchObject({state:'needs_attention',finalized:1,issueCount:1,invoices:3});
+    expect(first).toMatchObject({state:'needs_attention',finalized:1,issueCount:1,invoices:0});
     expect((await db.query('SELECT * FROM upstream_statements'))[0].rows).toHaveLength(2);
     await db.query('UPDATE accounts SET owner_id=$2,ownership_verified=true WHERE id=$1',[unassigned.account_id,agent.id]);
     const second=await recordDailyStatement(db,connection,owner,day,input);
-    expect(second).toMatchObject({state:'succeeded',finalized:2,invoices:2});
+    expect(second).toMatchObject({state:'succeeded',finalized:2,invoices:3});
     expect(await db.query('SELECT * FROM invoice_items')).toHaveLength(5);
     expect(await db.query('SELECT * FROM upstream_statements')).toHaveLength(1);
   });

@@ -30,6 +30,22 @@ export async function createDailyInvoices(db: DB, owner: Row, day: string) {
   return { created, issues };
 }
 
+async function automaticDayReady(db:DB,day:string,connectionId:string,hasIssues:boolean) {
+  if(hasIssues)return false;
+  const [result]=await db.query(`SELECT NOT EXISTS(
+      SELECT 1 FROM connections c WHERE c.id<>$2
+      AND ((c.enabled AND (c.created_at AT TIME ZONE 'Asia/Shanghai')::date<=$1)
+        OR EXISTS(SELECT 1 FROM usage_days u JOIN bindings b ON b.id=u.binding_id WHERE b.connection_id=c.id AND u.day=$1))
+      AND NOT EXISTS(SELECT 1 FROM billing_days d WHERE d.connection_id=c.id AND d.day=$1 AND d.state='succeeded' AND d.issue_count=0)
+    ) AND NOT EXISTS(
+      SELECT 1 FROM usage_days u JOIN bindings b ON b.id=u.binding_id JOIN accounts a ON a.id=b.account_id
+      WHERE u.day=$1 AND a.ownership_verified AND u.state<>'final'
+    ) AND NOT EXISTS(
+      SELECT 1 FROM billing_entries e WHERE e.day=$1 AND e.state<>'recorded'
+    ) AS ready`,[day,connectionId]);
+  return !!result.ready;
+}
+
 export async function recordDailyStatement(db: DB, connection: Row, owner: Row, day: string, input: DailyAmount[],
   options:{basis?:'upstream'|'snapshot';autoFinalize?:boolean;issues?:Issue[];sourceError?:string;reviewed?:boolean}={}) {
   assert(day < today(), '仅可结算已经结束的北京时间日期');
@@ -89,16 +105,23 @@ export async function recordDailyStatement(db: DB, connection: Row, owner: Row, 
       await db.query(`UPDATE billing_entries SET state='blocked',error=$4 WHERE connection_id=$1 AND day=$2 AND external_id=$3`, [connection.id,day,row.externalId,message]);
     }
   }
-  const absent = await db.query(`SELECT d.id,b.external_id,d.state,d.raw_usd FROM usage_days d JOIN bindings b ON b.id=d.binding_id
-    WHERE b.connection_id=$1 AND d.day=$2 AND NOT(b.external_id=ANY($3::text[])) AND (d.state='final' OR d.raw_usd>0)`, [connection.id, day, rows.map(row => row.externalId)]);
+  const absent = await db.query(`SELECT d.id,b.external_id FROM bindings b JOIN accounts a ON a.id=b.account_id
+    LEFT JOIN usage_days d ON d.binding_id=b.id AND d.day=$2
+    WHERE b.connection_id=$1 AND NOT(b.external_id=ANY($3::text[])) AND a.ownership_verified
+    AND b.status='active' AND b.local_enabled AND (b.created_at AT TIME ZONE 'Asia/Shanghai')::date<=$2`,
+  [connection.id, day, rows.map(row => row.externalId)]);
   for (const row of absent) {
-    const message='上游完整日账单缺少已有用量账号，已保留原记录等待核对';
+    const message='上游完整日账单缺少已连接账号，已阻止部分结算并等待自动重试';
     issues.push({ externalId: row.external_id, message });
     await db.query(`INSERT INTO billing_entries(connection_id,day,external_id,usage_id,state,error) VALUES($1,$2,$3,$4,'blocked',$5)
       ON CONFLICT(connection_id,day,external_id) DO UPDATE SET state='blocked',usage_id=EXCLUDED.usage_id,error=EXCLUDED.error`, [connection.id,day,row.external_id,row.id,message]);
   }
 
-  const invoices = await createDailyInvoices(db, owner, day);
+  const preliminaryState=issues.length?'needs_attention':'succeeded';
+  await db.query(`UPDATE billing_days SET state=$3,finalized_count=$4,issue_count=$5,issues=$6,error=NULL,source_error=$7
+    WHERE connection_id=$1 AND day=$2`,[connection.id,day,preliminaryState,finalized,issues.length,JSON.stringify(issues.slice(0,100)),options.sourceError??null]);
+  const invoices = await automaticDayReady(db,day,connection.id,!!issues.length)
+    ? await createDailyInvoices(db, owner, day) : {created:0,issues:[] as Issue[]};
   issues.push(...invoices.issues);
   const state = issues.length ? 'needs_attention' : 'succeeded';
   await db.transaction(async tx => {

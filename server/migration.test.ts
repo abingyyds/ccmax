@@ -40,7 +40,7 @@ it('upgrades legacy records without treating an email reservation as proof of ow
   expect(flags.find(a=>a.id===assigned)?.ownership_verified).toBe(true);
   await expect(db.query('UPDATE accounts SET owner_id=$2 WHERE id=$1',[sealed,other])).rejects.toThrow('immutable');
   await db.query('UPDATE accounts SET ownership_verified=true WHERE id=$1',[sealed]);
-  expect(await db.query('SELECT * FROM migrations')).toHaveLength(25);
+  expect(await db.query('SELECT * FROM migrations')).toHaveLength(26);
   expect(await db.query('SELECT * FROM invitations')).toEqual([]);
   expect(await db.query('SELECT * FROM oauth_code_claims')).toEqual([]);
 
@@ -78,7 +78,7 @@ it('upgrades existing provider checks so Platform E can be added after the origi
   const invitation=id();
   await db.query("INSERT INTO invitations(id,inviter_id,name,token_hash,token_secret) VALUES($1,$2,'Platform E invite','platform-e-hash','platform-e-secret')",[invitation,owner.id]);
   await db.query("INSERT INTO invitation_rates(invitation_id,provider,rate) VALUES($1,'aeromax',0.16)",[invitation]);
-  expect((await db.query('SELECT version FROM migrations ORDER BY version DESC LIMIT 1'))[0].version).toBe(25);
+  expect((await db.query('SELECT version FROM migrations ORDER BY version DESC LIMIT 1'))[0].version).toBe(26);
  } finally {await db.close();}
 });
 
