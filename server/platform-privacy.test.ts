@@ -7,9 +7,9 @@ import { openTestDB } from './test-db.js';
 import { createInvoice, ingestUsage } from './billing.js';
 import { saveBinding, enqueue } from './worker.js';
 import { PROVIDER_KEYS, PROVIDERS } from './providers.js';
-import { decodePlatformRequest, encodePlatformResponse, publicProvider } from './platform-privacy.js';
+import { decodePlatformRequest, encodePlatformResponse, publicProvider, publicPlatformName } from './platform-privacy.js';
 
-const privateSource=/gatelink|ai008|minicc|maxchat|aeromax|e-coding|mini\s*cc|207\.57\.170\.28|private-master/gi;
+const privateSource=/gatelink|ai008|minicc|maxchat|aeromax|accedra|e-coding|mini\s*cc|207\.57\.170\.28|private-master/gi;
 const password='platform-privacy-test-password', encryptionKey='ac'.repeat(32);
 const yesterday=new Date(Date.parse(today()+'T00:00:00Z')-86400000).toISOString().slice(0,10);
 
@@ -22,7 +22,7 @@ describe('private platform identities at the HTTP boundary',()=>{
  beforeEach(async()=>{
   connections.length=0;db=await openTestDB();await migrate(db);await bootstrap(db,{ADMIN_EMAIL:'privacy-owner@example.com',ADMIN_PASSWORD:password});
   ({app}=await createApp(db,{encryptionKey,appUrl:'http://localhost:3000'}));ownerCookie=await login('privacy-owner@example.com');
-  const result=await request('POST','/api/team',{name:'Privacy agent',email:'privacy-agent@example.com',password,rates:{A:0.2,B:0.2,C:0.2,D:0.2,E:0.2},effectiveFrom:'1970-01-01'},ownerCookie);
+  const result=await request('POST','/api/team',{name:'Privacy agent',email:'privacy-agent@example.com',password,rates:{A:0.2,B:0.2,C:0.2,D:0.2,E:0.2,X:0.2},effectiveFrom:'1970-01-01'},ownerCookie);
   expect(result.statusCode,result.body).toBe(200);agent=result.json().user;agentCookie=await login(agent.email);
   accountId=id();await db.query("INSERT INTO accounts(id,owner_id,email,ownership_verified) VALUES($1,$2,'privacy-claude@example.com',true)",[accountId,agent.id]);
   const box=secretBox(encryptionKey);
@@ -38,18 +38,18 @@ describe('private platform identities at the HTTP boundary',()=>{
  });
  afterEach(async()=>{vi.unstubAllGlobals();await app.close();await db.close();});
 
- it('serves only A–E to session/API-key agents and anonymous invitees, including every export, without rewriting financial records',async()=>{
+ it('serves only A–E and X to session/API-key agents and anonymous invitees, including every export, without rewriting financial records',async()=>{
   const before={usage:await db.query('SELECT * FROM usage_days ORDER BY id'),earnings:await db.query('SELECT * FROM earnings ORDER BY id'),rates:await db.query('SELECT * FROM rates ORDER BY id')};
   const key=await request('POST','/api/settings/api-keys',{name:'Privacy integration',scopes:['read'],expiresInDays:30,currentPassword:password});expect(key.statusCode).toBe(200);const token=key.json().token;
   const paths=['/api/connections','/api/dashboard','/api/accounts','/api/team','/api/team/pricing','/api/jobs','/api/audits','/api/telemetry','/api/telemetry/platforms',`/api/usage?from=${yesterday}&to=${yesterday}`,`/api/usage/export?from=${yesterday}&to=${yesterday}`,`/api/invoices/${invoice.id}/export`,`/api/invoices/preview?from=${yesterday}&to=${yesterday}`];
   for(const bearer of [undefined,token])for(const path of paths){const r=await request('GET',path,undefined,agentCookie,bearer);expect(r.statusCode,path).toBe(200);safe(r.body);}
-  const catalog=(await request('GET','/api/connections')).json();expect(Object.keys(catalog.providers)).toEqual(['A','B','C','D','E']);
-  for(const c of catalog.connections){expect(c.name).toContain(`平台 ${c.provider}`);expect(c.capabilities).not.toHaveProperty('url');expect(c.capabilities).not.toHaveProperty('upstreamName');expect(c.settlement_rate).toBe('0.2000');}
+  const catalog=(await request('GET','/api/connections')).json();expect(Object.keys(catalog.providers)).toEqual(['A','B','C','D','E','X']);
+  for(const c of catalog.connections){expect(c.name).toContain(publicPlatformName(c.provider));expect(c.capabilities).not.toHaveProperty('url');expect(c.capabilities).not.toHaveProperty('upstreamName');expect(c.settlement_rate).toBe('0.2000');}
   const owner=(await request('GET','/api/connections',undefined,ownerCookie)).json();expect(owner.connections[0].capabilities).toMatchObject({upstreamName:'Gatelink',url:PROVIDERS.gatelink.url});
   const invite=await request('POST','/api/team/invitations',{name:'Private offer',rates:{A:0.1,D:0},expiresInDays:30});expect(invite.statusCode).toBe(200);
   const url=new URL(invite.json().invitation.url),preview=await request('GET',`/api/invitations/${url.pathname.split('/').at(-1)}`,undefined,'');expect(preview.statusCode).toBe(200);safe(preview.body);expect(preview.json().rates).toEqual({A:'0.1000',D:'0.0000',E:'0.1600'});
   for(const path of ['/api/docs','/api/openapi.json']){const response=await request('GET',path,undefined,'');expect(response.statusCode).toBe(200);safe(response.body);}
-  const csv=await request('GET',`/api/invoices/${invoice.id}/export`);for(const code of 'ABCDE')expect(csv.body).toContain(`平台 ${code}`);
+  const csv=await request('GET',`/api/invoices/${invoice.id}/export`);for(const code of 'ABCDEX')expect(csv.body).toContain(publicPlatformName(code));
   expect(await db.query('SELECT * FROM usage_days ORDER BY id')).toEqual(before.usage);expect(await db.query('SELECT * FROM earnings ORDER BY id')).toEqual(before.earnings);expect(await db.query('SELECT * FROM rates ORDER BY id')).toEqual(before.rates);
  });
 
@@ -81,7 +81,7 @@ describe('private platform identities at the HTTP boundary',()=>{
  });
 
  it('routes public filters, single prices, batch prices and invitations back to the original independent platform',async()=>{
-  for(const code of 'ABCDE'){const usage=await request('GET',`/api/usage?provider=${code}`);expect(usage.statusCode,usage.body).toBe(200);expect(usage.json().rows).toHaveLength(1);expect(usage.json().rows[0]).toMatchObject({provider:code,raw_usd:'100.00000000',rate:'0.2000',gross_usd:'20.00000000'});}
+  for(const code of 'ABCDEX'){const usage=await request('GET',`/api/usage?provider=${code}`);expect(usage.statusCode,usage.body).toBe(200);expect(usage.json().rows).toHaveLength(1);expect(usage.json().rows[0]).toMatchObject({provider:code,raw_usd:'100.00000000',rate:'0.2000',gross_usd:'20.00000000'});}
   const created=await request('POST','/api/team',{name:'Child',email:'privacy-leaf@example.com',password,rates:{B:0.1,D:0},effectiveFrom:'1970-01-01'});expect(created.statusCode).toBe(200);const child=created.json().user;
   const changed=await request('PUT',`/api/team/${child.id}/rates`,{provider:'D',rate:0.12});expect(changed.statusCode).toBe(200);
   const planInput={provider:'B',userIds:[child.id],mode:'fixed',value:0.15},preview=await request('POST','/api/team/rates/preview',planInput);expect(preview.statusCode).toBe(200);expect(preview.json().provider).toBe('B');
@@ -108,5 +108,10 @@ it('does not alter opaque OAuth values, user input, dates or exact amounts while
  const callback='https://callback.example/?code=private-ai008-value&state=opaque',value={provider:'B',rates:{A:0,D:0.2},callback,refreshToken:'private-maxchat-token',name:'AI008 user label'};
  expect(decodePlatformRequest(value)).toEqual({...value,provider:'ai008',rates:{gatelink:0,maxchat:0.2}});
  expect(encodePlatformResponse({provider:'maxchat',amount:'0.00000001',callback,token:'ai008-secret',timestamp:new Date('2026-10-23T00:00:00Z')})).toEqual({provider:'D',amount:'0.00000001',callback,token:'ai008-secret',timestamp:new Date('2026-10-23T00:00:00Z')});
- expect(PROVIDER_KEYS.map(publicProvider)).toEqual(['A','B','C','D','E']);
+ expect(PROVIDER_KEYS.map(publicProvider)).toEqual(['A','B','C','D','E','X']);
+});
+
+it('calls Accedra Platform X (✨ Anti-Ban) without exposing its internal identity',()=>{
+ expect(publicProvider('accedra')).toBe('X');
+ expect(encodePlatformResponse({provider:'accedra',connection_name:'Accedra'})).toEqual({provider:'X',connection_name:'Platform X (✨ Anti-Ban)'});
 });

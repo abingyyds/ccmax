@@ -1528,5 +1528,19 @@
   "自动修复：按管理员设置移除重复快照": "Automatic repair: removed duplicate snapshots under administrator policy",
   "允许在平台 E 实例冲突时替换已有实例（可能中断原实例）": "Allow replacement on Platform E instance conflict (may interrupt the existing instance)",
   "平台 E 已有同名实例，请核对后重新生成授权链接，并勾选允许替换已有实例": "Platform E already has an instance with this name. Review it, generate a new authorization link, and enable replacement if intended.",
-  "仅平台 E 支持显式替换已有实例": "Explicit instance replacement is supported only on Platform E"
+  "仅平台 E 支持显式替换已有实例": "Explicit instance replacement is supported only on Platform E",
+  "Platform X (✨ Anti-Ban)": "Platform X (✨ Anti-Ban)",
+  "Platform X (✨ Anti-Ban) (Accedra)": "Platform X (✨ Anti-Ban) (Accedra)",
+  "不支持": "Unsupported",
+  "可用金额": "Available amount",
+  "可提现金额": "Withdrawable amount",
+  "累计收益": "Lifetime earned",
+  "累计已支付": "Lifetime paid",
+  "按收益入账日结算，不使用预估消耗。": "Settlement follows the day earnings are credited, without estimated consumption.",
+  "API 地址固定为 https://accedra.xyz；API 密钥仅保存在服务器。": "The API address is fixed at https://accedra.xyz. The API key is stored only on the server.",
+  "新的 API 密钥（留空保留）": "New API key (leave blank to keep)",
+  "Platform X (✨ Anti-Ban) 的上游结算折扣固定为 0.25。": "Platform X (✨ Anti-Ban) has a fixed upstream settlement rate of 0.25.",
+  "接入后不可更换账号固定代理": "The account proxy cannot be changed after connection",
+  "请继续完成下一步平台授权": "Continue with the next authorization step",
+  "Platform X (✨ Anti-Ban) 需要逐步完成独立授权；每一步使用新的授权链接和回调。": "Complete Platform X (✨ Anti-Ban) authorization one step at a time; each step uses a new authorization link and callback."
 }

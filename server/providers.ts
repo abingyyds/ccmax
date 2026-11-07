@@ -1,3 +1,4 @@
+import { AccedraClient, type AccedraAuthorization } from './accedra.js';
 import { AppError, assert,MAX_USD } from './core.js';
 import { createHash } from 'node:crypto';
 import Decimal from 'decimal.js';
@@ -15,6 +16,7 @@ export const PROVIDERS = {
   minicc: { name:upstreamNames.minicc, url:'http://207.57.170.28:8096', oauth:true, refreshTokenImport:true, historicalUsage:true,statusRequiresAdmin:false },
   maxchat: { name:upstreamNames.maxchat, url:'https://cldgtw.maxchatapi.com', oauth:true, refreshTokenImport:true, historicalUsage:true,statusRequiresAdmin:false },
   aeromax: { name:upstreamNames.aeromax, url:'https://www.aeromax.one', oauth:true, refreshTokenImport:false, historicalUsage:false,statusRequiresAdmin:false },
+  accedra: { name:upstreamNames.accedra, url:'https://accedra.xyz', oauth:true, refreshTokenImport:false, historicalUsage:true, statusRequiresAdmin:false, statusControl:false, proxyRotation:false },
 } as const;
 // Owner-only source metadata; public catalogs never contain upstream names/URLs.
 export function platformCatalog(owner=false, enabledProviders?: Iterable<string>) {
@@ -27,8 +29,8 @@ export type ProviderKey=keyof typeof PROVIDERS;
 export const PROVIDER_KEYS=Object.keys(PROVIDERS) as [ProviderKey,...ProviderKey[]];
 export const usesAdminOAuth=(provider:ProviderKey)=>provider==='ai008'||provider==='maxchat';
 export type Credentials={username:string;password:string};
-export type UpstreamAccount={id:string;email:string;name:string;status:string;dailyUsd:string|null;cost7d:string|null;cost30d:string|null;utilization:number|null;proxyExternalId?:string|null;telemetry?:AccountTelemetry};
-export type OAuthOptions={email:string;proxy?:string;proxyExternalId?:string;accountType?:string;policyTemplateId?:string;groupIds?:string[];ccTemplateId?:string;existingExternalId?:string;note?:string};
+export type UpstreamAccount={id:string;email:string;name:string;status:string;dailyUsd:string|null;cost7d:string|null;cost30d:string|null;utilization:number|null;proxyExternalId?:string|null;telemetry?:AccountTelemetry;nextAuthorization?:AccedraAuthorization};
+export type OAuthOptions={email:string;proxy?:string;proxyExternalId?:string;accountType?:string;policyTemplateId?:string;groupIds?:string[];ccTemplateId?:string;existingExternalId?:string;note?:string;idempotencyKey?:string;userAgent?:string};
 export type UpstreamDiagnostic={status:number;operation:string;format?:'json'|'non_json'|'unreadable';contentType?:string;responseBytes?:number;requestId?:string;code?:string;fields?:Record<string,string|number|boolean|null>;responseShape?:string[];stage?:string};
 export class UpstreamError extends AppError {
   constructor(public upstreamStatus:number, message:string, public upstreamCode?:string,public diagnostic?:UpstreamDiagnostic) { super(502,message); }
@@ -134,6 +136,7 @@ export class ProviderClient {
   public user:any;
   public providerSnapshot:any;
   constructor(public provider:ProviderKey,private credentials:Credentials,private request:typeof fetch=fetch) {}
+  private accedra() { return new AccedraClient(this.credentials,this.request); }
   exportSession() { return {cookies:[...this.cookies],token:this.token,csrf:this.csrf,user:this.user}; }
   restoreSession(session:any) { this.cookies=new Map(session.cookies);this.token=session.token;this.csrf=session.csrf;this.user=session.user; }
   async call(path:string,method='GET',body?:unknown) {
@@ -195,6 +198,7 @@ export class ProviderClient {
     catch { throw new UpstreamError(response.status,'平台响应格式变化，请检查适配器'); }
   }
   async login() {
+    if(this.provider==='accedra') {await this.accedra().accounts();this.user={role:'provider',username:'provider-api'};return this.user;}
     if(this.provider==='gatelink') {
       const data=await this.call('/api/auth/login','POST',{username:this.credentials.username,password:this.credentials.password});
       assert(data.user && data.csrfToken,'Gatelink 登录响应缺少会话信息',502);
@@ -217,6 +221,7 @@ export class ProviderClient {
     return {role:this.user.role,username:this.user.username};
   }
   async listAccounts():Promise<UpstreamAccount[]> {
+    if(this.provider==='accedra') {const client=this.accedra(),accounts=await client.liveAccounts();this.providerSnapshot=await client.finance();return accounts;}
     const result:UpstreamAccount[]=[];
     const seen=new Set<string>(),emails=new Set<string>();let declaredTotal:number|undefined;
     for(let page=1;page<=1000;page++) {
@@ -359,6 +364,7 @@ export class ProviderClient {
     throw new UpstreamError(0,'平台账号超过分页上限，本次同步未提交');
   }
   normalize(a:any):UpstreamAccount {
+    if(this.provider==='accedra')return this.accedra().normalize(a);
     if(this.provider==='aeromax') {
       const email=typeof a.service?.ownerEmail==='string'?a.service.ownerEmail.trim().toLowerCase():'';
       assert(a.providerId && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email),'E-coding 未返回可核实的账号归属邮箱',502);
@@ -398,7 +404,7 @@ export class ProviderClient {
       ...(!gate?{proxyExternalId:a.outbound_proxy_id?String(a.outbound_proxy_id):null}:{})};
   }
   async enrichTelemetry(accounts:UpstreamAccount[]) {
-    if(this.provider==='gatelink'||this.provider==='aeromax')return;
+    if(this.provider==='gatelink'||this.provider==='aeromax'||this.provider==='accedra')return;
     // Optional operational reads are isolated per account. An unavailable
     // detail endpoint must not prevent inventory or financial synchronization.
     let index=0;
@@ -448,6 +454,7 @@ export class ProviderClient {
     }
   }
   async options() {
+    if(this.provider==='accedra')return {requireProxy:true,configurationLocked:true,accountTypes:[],proxyMode:'fixed'};
     if(this.provider==='gatelink') {
       const settings=await this.call('/api/settings/submission');
       return {requireProxy:true,accountTypes:['speed','stable','team'],settings:{proxyMode:settings.proxyMode}};
@@ -516,6 +523,7 @@ export class ProviderClient {
     throw new UpstreamError(0,'平台代理分页超过上限');
   }
   async verifyProxyMapping(url:string,externalId:string) {
+    assert(this.provider!=='accedra','Platform X (✨ Anti-Ban) 不支持此操作，请联系管理员核对');
     const records=await this.remoteProxies();
     const record=records.find(p=>String(this.provider==='minicc'?(p.upstream_id??p.id):p.id)===externalId);
     assert(record && this.proxyMatches(record,url,false),'上游代理地址与账号固定代理不符或不可核实，已阻止上号',502);
@@ -524,6 +532,7 @@ export class ProviderClient {
     return this.usableProxy(record,true);
   }
   async provisionProxy(url:string,existingExternalId?:string) {
+    assert(this.provider!=='accedra','Platform X (✨ Anti-Ban) 不支持此操作，请联系管理员核对');
     const normalized=parseProxy(url).url;
     if(this.provider==='gatelink'||this.provider==='aeromax')return null;
     const before=await this.remoteProxies();
@@ -581,7 +590,8 @@ export class ProviderClient {
     const proxy=parseProxy(options.proxy!).url.replace(/^socks5h:/,'socks5:');
     return {accountType,oauthFlow:'login',loginMethod:options.email,proxy};
   }
-  async startOAuth(options:OAuthOptions) {
+  async startOAuth(options:OAuthOptions):Promise<AccedraAuthorization> {
+    if(this.provider==='accedra')return this.accedra().start(options);
     this.requireProxy(options);
     if(this.provider==='aeromax') {
       const data=await this.call('/api/v1/provider/uploader/sessions','POST',{httpProxy:options.proxy,acceptDirectRisk:false});
@@ -608,7 +618,8 @@ export class ProviderClient {
     assert(data.url && data.state,'平台未返回 OAuth URL / state',502);
     return {url:data.url,secret:{options,pendingState:data.state},expiresIn:600};
   }
-  async exchangeOAuth(secret:any,callback:string,allowInstanceReplacement=false) {
+  async exchangeOAuth(secret:any,callback:string,allowInstanceReplacement=false):Promise<UpstreamAccount> {
+    if(this.provider==='accedra')return this.accedra().complete(secret,callback);
     this.requireProxy(secret.options);
     if(this.provider==='aeromax') {
       const stageFailure=(error:unknown,stage:string)=>error instanceof UpstreamError
@@ -743,6 +754,7 @@ export class ProviderClient {
     return {id:String(data.id),email:String(email).toLowerCase(),name:String(email),status:account.status||'active',dailyUsd:'0',cost7d:null,cost30d:null,utilization:null,proxyExternalId:expectedProxyId};
   }
   async verifySubmissionTarget(externalId:string,email:string) {
+    if(this.provider==='accedra') {await this.accedra().identity(externalId,email);return;}
     if(this.provider==='aeromax') {
       const remote=(await this.listAccounts()).find(account=>account.id===externalId);
       assert(remote?.email===email.toLowerCase(),'E-coding 原账号不存在或邮箱不一致，请管理员同步核对',409);return;
@@ -758,6 +770,7 @@ export class ProviderClient {
     assert(identity&&String(identity).toLowerCase()===email,'上游原账号不存在或邮箱不一致，请管理员同步核对；未覆盖其他账号',409);
   }
   async setEnabled(externalId:string,enabled:boolean) {
+    assert(this.provider!=='accedra','Platform X (✨ Anti-Ban) 不支持此操作，请联系管理员核对');
     if(this.provider==='aeromax')return this.call(`/api/v1/provider/accounts/${encodeURIComponent(externalId)}/actions`,'POST',{action:enabled?'enable':'disable'});
     if(this.provider==='gatelink') {
       assert(this.user?.role==='admin','Gatelink 启停账号需要上游管理员权限，当前主账号无此权限');
@@ -783,6 +796,7 @@ export class ProviderClient {
     assert(identity?.toLowerCase()===email&&status===(enabled?'active':'disabled'),'上游尚未确认目标账号状态，请同步核对；本地未提前修改状态',502);
   }
   async setAccountProxy(externalId:string,options:OAuthOptions) {
+    assert(this.provider!=='accedra','Platform X (✨ Anti-Ban) 不支持此操作，请联系管理员核对');
     this.requireProxy(options);
     if(this.provider==='aeromax') {
       await this.call(`/api/v1/provider/accounts/${encodeURIComponent(externalId)}/proxy`,'PUT',{httpProxy:options.proxy});
@@ -797,6 +811,7 @@ export class ProviderClient {
     assert(account && String(account.outbound_proxy_id||'')===options.proxyExternalId,'上游实际代理未匹配，请核对后重试',502);
   }
   async historicalDay(day:string):Promise<{externalId:string;rawUsd:string}[]> {
+    if(this.provider==='accedra')return this.accedra().statement(day);
     assert(/^\d{4}-\d{2}-\d{2}$/.test(day)&&Number.isFinite(Date.parse(day))&&new Date(day+'T00:00:00Z').toISOString().slice(0,10)===day,'日期无效');
     if(this.provider==='gatelink') {
       // Probe the actual permission, rather than rejecting all agent logins.

@@ -1528,5 +1528,19 @@
   "自动修复：按管理员设置移除重复快照": "Sửa tự động: xóa ảnh chụp trùng theo cài đặt quản trị viên",
   "允许在平台 E 实例冲突时替换已有实例（可能中断原实例）": "Cho phép thay thế khi xung đột phiên bản nền tảng E (có thể gián đoạn phiên bản hiện có)",
   "平台 E 已有同名实例，请核对后重新生成授权链接，并勾选允许替换已有实例": "Nền tảng E đã có phiên bản cùng tên. Hãy kiểm tra, tạo lại liên kết ủy quyền và chọn cho phép thay thế nếu cần.",
-  "仅平台 E 支持显式替换已有实例": "Chỉ nền tảng E hỗ trợ thay thế phiên bản có xác nhận"
+  "仅平台 E 支持显式替换已有实例": "Chỉ nền tảng E hỗ trợ thay thế phiên bản có xác nhận",
+  "Platform X (✨ Anti-Ban)": "Platform X (✨ Anti-Ban)",
+  "Platform X (✨ Anti-Ban) (Accedra)": "Platform X (✨ Anti-Ban) (Accedra)",
+  "不支持": "Không hỗ trợ",
+  "可用金额": "Số tiền khả dụng",
+  "可提现金额": "Số tiền có thể rút",
+  "累计收益": "Tổng thu nhập",
+  "累计已支付": "Tổng đã thanh toán",
+  "按收益入账日结算，不使用预估消耗。": "Quyết toán theo ngày ghi có thu nhập, không dùng mức tiêu thụ ước tính.",
+  "API 地址固定为 https://accedra.xyz；API 密钥仅保存在服务器。": "Địa chỉ API cố định là https://accedra.xyz. Khóa API chỉ được lưu trên máy chủ.",
+  "新的 API 密钥（留空保留）": "Khóa API mới (để trống để giữ nguyên)",
+  "Platform X (✨ Anti-Ban) 的上游结算折扣固定为 0.25。": "Platform X (✨ Anti-Ban) có tỷ lệ quyết toán thượng nguồn cố định là 0.25.",
+  "接入后不可更换账号固定代理": "Không thể thay đổi proxy tài khoản sau khi kết nối",
+  "请继续完成下一步平台授权": "Tiếp tục bước ủy quyền tiếp theo",
+  "Platform X (✨ Anti-Ban) 需要逐步完成独立授权；每一步使用新的授权链接和回调。": "Hoàn tất ủy quyền nền tảng F theo từng bước; mỗi bước dùng liên kết ủy quyền và callback mới."
 }

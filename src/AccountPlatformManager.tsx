@@ -54,17 +54,17 @@ export default function AccountPlatformManager({account,onClose,onOnboard,onRefr
         <div className="account-platform-price"><span>{t('我的结算折扣')}</span><RateBadge value={connection.settlement_rate}/><small>{t('平台账单 × 此折扣 = 我的应收美元')}</small></div>
         {connection.upcoming_settlement_rate!==null&&connection.upcoming_settlement_rate!==undefined&&<p className="form-hint">{t('待生效')} <RateBadge value={connection.upcoming_settlement_rate}/> · {connection.upcoming_settlement_date}</p>}
         {binding?<>
-          <p className="account-platform-proxy">{verifiedProxy?t('沿用账号固定代理'):connection.provider==='A'?t('重新授权后自动应用账号代理'):t('系统自动同步账号代理')}</p>
+          <p className="account-platform-proxy">{connection.capabilities?.proxyRotation===false?t('接入后不可更换账号固定代理'):verifiedProxy?t('沿用账号固定代理'):connection.provider==='A'?t('重新授权后自动应用账号代理'):t('系统自动同步账号代理')}</p>
           <small>{t('最近同步')} {dateTime(binding.snapshot_at||binding.last_seen_at)}</small>
           <details className="account-platform-ids"><summary>{t('对账信息')}</summary><small>{t('上游账号 ID：')}{binding.external_id}</small><small>{t('对账绑定 ID：')}{binding.id}</small></details>
           <div className="account-platform-actions">
-            {canManage&&connection.enabled&&<>
+            {canManage&&connection.enabled&&connection.capabilities?.statusControl!==false&&<>
               <button className="button" disabled={!!pending||!effectiveActive&&!canActivate} onClick={()=>submit(connection,binding,!effectiveActive)}>{effectiveActive?t('停用'):t('启用')}</button>
               <button className="button" disabled={!!pending} onClick={()=>{setEditing(binding.id);setEnabled(effectiveActive?'active':'disabled');}}>{t('编辑状态')}</button>
             </>}
-            {canManage&&current.ownership_verified&&connection.enabled&&<button className="button primary" disabled={!proxyReady||!!pending} onClick={()=>onOnboard(current,connection.id,binding.id)}>{t('重新授权')}</button>}
+            {canManage&&current.ownership_verified&&connection.enabled&&connection.provider!=='X'&&<button className="button primary" disabled={!proxyReady||!!pending} onClick={()=>onOnboard(current,connection.id,binding.id)}>{t('重新授权')}</button>}
           </div>
-          {editing===binding.id&&<div className="account-platform-editor"><Field label={t('{0} 目标状态',[name])}><select value={enabled} onChange={event=>setEnabled(event.target.value)}><option value="active">{t('启用')}</option><option value="disabled">{t('停用')}</option></select></Field><button className="button primary" disabled={!!pending||enabled==='active'&&!canActivate} onClick={()=>submit(connection,binding,enabled==='active')}>{t('保存状态')}</button><button className="button" onClick={()=>setEditing('')}>{t('取消')}</button></div>}
+          {editing===binding.id&&connection.capabilities?.statusControl!==false&&<div className="account-platform-editor"><Field label={t('{0} 目标状态',[name])}><select value={enabled} onChange={event=>setEnabled(event.target.value)}><option value="active">{t('启用')}</option><option value="disabled">{t('停用')}</option></select></Field><button className="button primary" disabled={!!pending||enabled==='active'&&!canActivate} onClick={()=>submit(connection,binding,enabled==='active')}>{t('保存状态')}</button><button className="button" onClick={()=>setEditing('')}>{t('取消')}</button></div>}
           {connection.provider==='A'&&<p className="form-hint">{t('平台 A 主账号有管理员权限时同步上游状态；权限不足时同一按钮仅暂停或恢复 CCMAX 使用。')}</p>}
           {connection.provider==='A'&&!localEnabled&&<p className="form-hint">{t('本地已停用平台使用；不会修改上游账号状态。')}</p>}
         </>:<div className="account-platform-actions">{own&&connection.enabled&&<button className="button primary" disabled={!proxyReady} onClick={()=>onOnboard(current,connection.id)}>{t('上号到此平台')}</button>}</div>}

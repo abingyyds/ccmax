@@ -20,7 +20,7 @@ CREATE TABLE sessions (
 );
 CREATE TABLE connections (
   id text PRIMARY KEY,
-  provider text NOT NULL CHECK(provider IN ('gatelink','ai008','minicc','maxchat','aeromax')),
+  provider text NOT NULL CHECK(provider IN ('gatelink','ai008','minicc','maxchat','aeromax','accedra')),
   name text NOT NULL,
   credentials text NOT NULL,
   payout_rate numeric(5,4) NOT NULL CHECK(payout_rate>=0 AND payout_rate<=1),
@@ -44,7 +44,7 @@ CREATE INDEX connection_rates_lookup ON connection_rates(connection_id,effective
 CREATE TABLE rates (
   id text PRIMARY KEY,
   user_id text NOT NULL REFERENCES users(id),
-  provider text NOT NULL CHECK(provider IN ('gatelink','ai008','minicc','maxchat','aeromax')),
+  provider text NOT NULL CHECK(provider IN ('gatelink','ai008','minicc','maxchat','aeromax','accedra')),
   rate numeric(5,4) NOT NULL CHECK(rate>=0 AND rate<=1),
   effective_date date NOT NULL,
   created_by text NOT NULL REFERENCES users(id),

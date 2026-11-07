@@ -4,6 +4,7 @@ import { ancestry, assert, audit, id, today, type SecretBox } from './core.js';
 import { ingestUsage, recordUsageObservation } from './billing.js';
 import { ProviderClient, UpstreamError, usesAdminOAuth, type ProviderKey, type UpstreamAccount } from './providers.js';
 import { privateAuthorizationUrl } from './platform-privacy.js';
+import { authorizationState } from '../shared/oauth.js';
 import { accountProxy } from './proxies.js';
 import { saveTelemetry } from './telemetry.js';
 import { awaitSnapshotBilling, failDailyBilling, recordDailyStatement } from './daily-billing.js';
@@ -60,7 +61,7 @@ export async function saveBinding(tx:DB,connection:Row,remote:UpstreamAccount,ex
     utilization=EXCLUDED.utilization,proxy_id=COALESCE(EXCLUDED.proxy_id,bindings.proxy_id),last_seen_at=now() RETURNING *`,
     [id(),account!.id,connection.id,remote.id,remote.status,remote.dailyUsd,remote.cost7d,remote.cost30d,remote.utilization,proxyId??null]);
   assert(bound.account_id===account!.id,'上游账号归属冲突',409);
-    if(connection.provider!=='gatelink' && connection.provider!=='aeromax' && account!.proxy_id && remote.proxyExternalId!==undefined) {
+    if(connection.provider!=='gatelink' && connection.provider!=='aeromax' && connection.provider!=='accedra' && account!.proxy_id && remote.proxyExternalId!==undefined) {
     const [mapping]=await tx.query('SELECT external_id FROM proxy_bindings WHERE proxy_id=$1 AND connection_id=$2',[account!.proxy_id,connection.id]);
     const verified=mapping && mapping.external_id===remote.proxyExternalId?account!.proxy_id:null;
     [bound]=await tx.query('UPDATE bindings SET proxy_id=$2 WHERE id=$1 RETURNING *',[bound.id,verified]);
@@ -68,6 +69,20 @@ export async function saveBinding(tx:DB,connection:Row,remote:UpstreamAccount,ex
   if(remote.telemetry)await saveTelemetry(tx,bound.id,remote.telemetry);
   await saveBillingSnapshot(tx,bound.id,remote);
   return bound;
+}
+
+async function saveInventoryBinding(tx:DB,connection:Row,remote:UpstreamAccount) {
+  if(connection.provider==='accedra') {
+    // An upstream exchange can finish before its response is received. Owned
+    // submissions need their exact-ID OAuth proof, even if another platform
+    // already verified this account. Inventory must not block a safe restart.
+    const [owned]=await tx.query('SELECT id FROM accounts WHERE email=$1 AND owner_id IS NOT NULL FOR UPDATE',[remote.email]);
+    if(owned) {
+      const [bound]=await tx.query('SELECT id FROM bindings WHERE account_id=$1 AND connection_id=$2 AND external_id=$3',[owned.id,connection.id,remote.id]);
+      if(!bound)return;
+    }
+  }
+  await saveBinding(tx,connection,remote);
 }
 
 export function createWorker(db:DB,box:SecretBox,clientFactory=(p:ProviderKey,c:any)=>new ProviderClient(p,c),kinds?:string[]) {
@@ -127,7 +142,7 @@ export function createWorker(db:DB,box:SecretBox,clientFactory=(p:ProviderKey,c:
         assert(secret.proxyId===proxy.id && secret.options?.proxy===proxy.url,'OAuth 代理快照不一致，请重新授权');
         if(recovery)assert(secret.options.existingExternalId===recovery.external_id,'重新授权的原绑定已变化，请核对');
         client.restoreSession(secret.session);
-        if(connection.provider!=='gatelink' && connection.provider!=='aeromax')await client.verifyProxyMapping(proxy.url,secret.options.proxyExternalId);
+        if(connection.provider!=='gatelink' && connection.provider!=='aeromax' && connection.provider!=='accedra')await client.verifyProxyMapping(proxy.url,secret.options.proxyExternalId);
       } else await client.login();
       if(job.kind==='sync') {
         assert(actor.role==='owner','仅管理员可以同步共享主账号');
@@ -142,7 +157,7 @@ export function createWorker(db:DB,box:SecretBox,clientFactory=(p:ProviderKey,c:
         // hide every account on an otherwise healthy upstream platform.
         await db.transaction(async tx=>{
           for(const remote of accounts) {
-            await saveBinding(tx,connection,remote);
+            await saveInventoryBinding(tx,connection,remote);
           }
           await tx.query(`UPDATE bindings SET status='missing' WHERE connection_id=$1 AND NOT(external_id=ANY($2::text[]))`,[connection.id,accounts.map(a=>a.id)]);
           await tx.query(`UPDATE connections SET status='connected',last_sync_at=now() WHERE id=$1`,[connection.id]);
@@ -153,6 +168,8 @@ export function createWorker(db:DB,box:SecretBox,clientFactory=(p:ProviderKey,c:
           // Keep the source snapshot for inspection without booking it today.
           if(remote.dailyUsd===null || remote.telemetry&&(remote.telemetry.day!==day||!remote.telemetry.sourceAt)) {skippedDaily++;continue;}
           const [binding]=await db.query('SELECT id,local_enabled FROM bindings WHERE connection_id=$1 AND external_id=$2',[connection.id,remote.id]);
+          // F inventory deliberately leaves owned submissions unbound until OAuth completes.
+          if(!binding&&connection.provider==='accedra'){skippedDaily++;continue;}
           if(!binding) {billingIssues.push({externalId:remote.id,message:'同步后找不到平台账号绑定'});continue;}
           if(connection.provider==='gatelink'&&(remote.status==='disabled'||binding.local_enabled===false)) {
             const [repeated]=await db.query(`SELECT 1 AS value FROM usage_days
@@ -179,17 +196,22 @@ export function createWorker(db:DB,box:SecretBox,clientFactory=(p:ProviderKey,c:
         const [bound]=await db.query('SELECT id FROM bindings WHERE account_id=$1 AND connection_id=$2',[account.id,connection.id]);
         assert(recovery?bound?.id===recovery.id:!bound,'平台已存在该账号，请由管理员核对归属后使用');
         if(recovery)await client.verifySubmissionTarget(recovery.external_id,account.email);
-        const options=await submissionOptions(client,connection,proxy,{...payload.options,email:account.email,...(recovery?{existingExternalId:recovery.external_id}:{})});
+        const options=await submissionOptions(client,connection,proxy,{...payload.options,email:account.email,...(connection.provider==='accedra'?{idempotencyKey:'ccmax:'+connection.id+':'+account.id}:{}),...(recovery?{existingExternalId:recovery.external_id}:{})});
         // Targeted admin OAuth reauthorization uses the existing account's proxy.
         // Repair and verify that proxy before asking it to issue a new link.
         if(recovery&&usesAdminOAuth(connection.provider))await client.setAccountProxy(recovery.external_id,options);
         const oauth=await client.startOAuth(options);
+        if(connection.provider==='accedra'&&oauth.completedAccount) {
+          await db.transaction(async tx=>{await accountProxy(tx,box,account.id,proxy.id);await saveBinding(tx,connection,oauth.completedAccount!,account,proxy.id);await audit(tx,actor.id,'account.submitted',account.id,{connectionId:connection.id,externalId:oauth.completedAccount!.id});});
+          result={accountId:account.id,externalId:oauth.completedAccount.id,completed:true};
+        } else {
         assert(actor.role==='owner'||!privateAuthorizationUrl(oauth.url),'授权链接暂不可用，请联系管理员核对平台配置',502);
         const oauthId=id();
         await db.query(`INSERT INTO oauth_attempts(id,user_id,connection_id,account_id,secret,authorization_url,expires_at)
           VALUES($1,$2,$3,$4,$5,$6,$7)`,[oauthId,actor.id,connection.id,account.id,
           box.encrypt({...oauth.secret,proxyId:proxy.id,...(recovery?{bindingId:recovery.id}:{}),session:client.exportSession()}),oauth.url,new Date(Date.now()+oauth.expiresIn*1000)]);
         result={accountId:account.id,attemptId:oauthId,authorizationUrl:oauth.url,expiresIn:oauth.expiresIn};
+        }
       } else if(job.kind==='oauth_exchange'||job.kind==='import_rt') {
         const accountId=attempt?.account_id??payload.accountId;
         const [account]=await db.query('SELECT * FROM accounts WHERE id=$1 AND owner_id=$2',[accountId,recovery?.owner_id??actor.id]);assert(account,'账号归属不匹配');
@@ -198,6 +220,20 @@ export function createWorker(db:DB,box:SecretBox,clientFactory=(p:ProviderKey,c:
         if(recovery)await client.verifySubmissionTarget(recovery.external_id,account.email);
         const remote=job.kind==='oauth_exchange'?await client.exchangeOAuth(box.decrypt(attempt!.secret),payload.callback,payload.replaceExistingInstance===true):await client.importRefreshToken(await submissionOptions(client,connection,proxy,{...payload.options,email:account.email}),payload.refreshToken);
         if(recovery)assert(remote.id===recovery.external_id&&remote.email===account.email,'重新授权返回的账号 ID 或邮箱不一致，请同步核对；未替换原绑定',409);
+        if(connection.provider==='accedra'&&attempt&&remote.nextAuthorization) {
+          const next=remote.nextAuthorization,nextId=id();
+          assert(remote.email===account.email&&(actor.role==='owner'||!privateAuthorizationUrl(next.url)),'Platform X (✨ Anti-Ban) 授权身份或下一步链接无效',502);
+          await db.transaction(async tx=>{
+            await accountProxy(tx,box,account.id,proxy.id);
+            await tx.query(`UPDATE oauth_attempts SET state='done',secret=$2,authorization_url='' WHERE id=$1`,[attempt!.id,box.encrypt({})]);
+            // One code claim per attempt is enforced by the existing UNIQUE key.
+            // Each required authorization therefore gets its own pending attempt.
+            await tx.query(`INSERT INTO oauth_attempts(id,user_id,connection_id,account_id,secret,authorization_url,expires_at)
+              VALUES($1,$2,$3,$4,$5,$6,$7)`,[nextId,actor.id,connection.id,account.id,
+              box.encrypt({...next.secret,pendingState:authorizationState(next.url),proxyId:proxy.id,session:client.exportSession()}),next.url,new Date(Date.now()+next.expiresIn*1000)]);
+          });
+          result={accountId:account.id,attemptId:nextId,continueAuthorization:true};
+        } else {
         await db.transaction(async tx=>{
           await accountProxy(tx,box,account.id,proxy.id);
           if(recovery) {
@@ -211,6 +247,7 @@ export function createWorker(db:DB,box:SecretBox,clientFactory=(p:ProviderKey,c:
           await audit(tx,actor.id,recovery?'binding.reauthorized':'account.submitted',recovery?.id??account.id,{connectionId:connection.id,externalId:remote.id});
         });
         result={accountId:account.id,externalId:remote.id,...(recovery?{bindingId:recovery.id,reauthorized:true}:{})};
+        }
       } else if(job.kind==='set_proxy') {
         const [binding]=await db.query(`SELECT b.*,a.owner_id,a.ownership_verified,a.email FROM bindings b JOIN accounts a ON a.id=b.account_id WHERE b.id=$1 AND b.account_id=$2 AND b.connection_id=$3`,[payload.bindingId,payload.accountId,connection.id]);
         assert(binding && ((binding.ownership_verified&&binding.owner_id===actor.id)||actor.role==='owner'),'不能修改该账号的代理');
@@ -271,6 +308,12 @@ export function createWorker(db:DB,box:SecretBox,clientFactory=(p:ProviderKey,c:
             rows=fallback.rows;sourceError=error.message;
           }
         }
+        if(connection.provider==='accedra') {
+          const known=await db.query(`SELECT external_id FROM bindings WHERE connection_id=$1
+            AND (created_at AT TIME ZONE 'Asia/Shanghai')::date<=$2`,[connection.id,payload.day]);
+          const reported=new Set(rows.map(row=>row.externalId));
+          rows.push(...known.filter(row=>!reported.has(row.external_id)).map(row=>({externalId:row.external_id,rawUsd:'0'})));
+        }
         // Regular account sync normally supplies these bindings. If a newly
         // discovered historical identity is missing, refresh inventory once;
         // inability to read today's optional counters cannot discard history.
@@ -278,7 +321,7 @@ export function createWorker(db:DB,box:SecretBox,clientFactory=(p:ProviderKey,c:
         if(rows.some(r=>!bindings.some(b=>b.external_id===r.externalId))) {
           try {
             const accounts=await client.listAccounts();
-            await db.transaction(async tx=>{for(const remote of accounts)await saveBinding(tx,connection,remote);});
+            await db.transaction(async tx=>{for(const remote of accounts)await saveInventoryBinding(tx,connection,remote);});
           } catch { /* Missing identities remain archived and are retried. */ }
         }
         result=fallback&&!rows.length
@@ -334,7 +377,7 @@ export function createWorker(db:DB,box:SecretBox,clientFactory=(p:ProviderKey,c:
   }
   async function submissionOptions(client:ProviderClient,connection:Row,proxy:any,options:any) {
     let externalId:string|undefined;
-    if(connection.provider!=='gatelink' && connection.provider!=='aeromax') {
+    if(connection.provider!=='gatelink' && connection.provider!=='aeromax' && connection.provider!=='accedra') {
       let [mapping]=await db.query('SELECT * FROM proxy_bindings WHERE proxy_id=$1 AND connection_id=$2',[proxy.id,connection.id]);
       if(mapping)await client.verifyProxyMapping(proxy.url,mapping.external_id);
       else {

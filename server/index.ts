@@ -2,12 +2,13 @@ import 'dotenv/config';
 import path from 'node:path';
 import { existsSync } from 'node:fs';
 import fastifyStatic from '@fastify/static';
-import { bootstrap, assert, id } from './core.js';
+import { bootstrap, assert } from './core.js';
 import { openDB, migrate } from './db.js';
 import { createApp } from './app.js';
-import { createWorker, enqueue } from './worker.js';
+import { createWorker } from './worker.js';
 import { scheduleDailyBilling, scheduleBillingSnapshots } from './billing-scheduler.js';
 import { syncPublishedKeyTasks } from './key-market.js';
+import { scheduleInventorySync } from './inventory-scheduler.js';
 import { autoRepairInvoices } from './invoice-repair.js';
 
 const prod=process.env.NODE_ENV==='production';
@@ -53,12 +54,10 @@ async function scheduleSync() {
   if(scheduling)return;scheduling=true;
   try {
     await worker.recover();
-    const [owner]=await db.query(`SELECT id FROM users WHERE role='owner'`);
-    const connections=await db.query('SELECT id FROM connections WHERE enabled=true');
-    for(const c of connections) await enqueue(db,box,owner.id,c.id,'sync',{},id());
+    await scheduleInventorySync(db,box);
   } finally{scheduling=false;}
 }
-const syncTimer=setInterval(()=>{scheduleSync().catch(e=>app.log.error(e));},Math.max(60,Number(process.env.SYNC_INTERVAL_SECONDS)||300)*1000);
+const syncTimer=setInterval(()=>{scheduleSync().catch(e=>app.log.error(e));},15000);
 await app.listen({host:process.env.HOST||'0.0.0.0',port:Number(process.env.PORT)||3000});
 let billingScheduling=false;
 let lastBillingMinute=-1;

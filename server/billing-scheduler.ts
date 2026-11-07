@@ -95,7 +95,7 @@ export async function scheduleBillingSnapshots(db: DB, box: SecretBox, now = new
     await tx.query('SELECT pg_advisory_xact_lock(7164023)');
     const [owner]=await tx.query("SELECT * FROM users WHERE role='owner' AND active=true");
     if(!owner)return [];
-    const connections=await tx.query('SELECT id FROM connections WHERE enabled=true');
+    const connections=await tx.query("SELECT id FROM connections WHERE enabled=true AND provider<>'accedra'");
     const jobs:Row[]=[];
     const minuteKey=`snapshot:${Math.floor(now.getTime()/60000)}`;
     for(const c of connections)jobs.push(await enqueue(tx,box,owner.id,c.id,'billing_snapshot',{},minuteKey));

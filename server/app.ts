@@ -285,6 +285,7 @@ export async function createApp(db:DB,config:{encryptionKey:string;appUrl:string
   app.post('/api/connections',async req=>{
     await requireOwner(req.user);
     const d=z.object({provider,name:z.string().trim().min(1).max(80),username:z.string().min(1).max(200),password:z.string().min(1).max(500),payoutRate:rate,effectiveFrom:date.optional(),snapshotBilling:z.boolean().optional(),initialAgentRate:rate.optional()}).parse(req.body);
+    if(d.provider==='accedra'){assert(d.payoutRate===0.25,'Platform X (✨ Anti-Ban) 合同折扣固定为 0.25');assert(!d.snapshotBilling,'Platform X (✨ Anti-Ban) 仅使用已入账收益日账单');}
     const connectionId=id(),effective=d.effectiveFrom??today();assert(effective<=today(),'初始价格日期不能在未来');
     await db.transaction(async tx=>{
       await lockPricing(tx);
@@ -307,6 +308,7 @@ export async function createApp(db:DB,config:{encryptionKey:string;appUrl:string
       await lockPricing(tx);
       const effective=nextDay();
       const [c]=await tx.query('SELECT * FROM connections WHERE id=$1 FOR UPDATE',[target]);assert(c,'平台连接不存在',404);
+      if(c.provider==='accedra'){assert(d.payoutRate===undefined||d.payoutRate===0.25,'Platform X (✨ Anti-Ban) 合同折扣固定为 0.25');assert(!d.snapshotBilling,'Platform X (✨ Anti-Ban) 仅使用已入账收益日账单');}
       const credentials=box.decrypt(c.credentials);
       await tx.query('UPDATE connections SET enabled=$2,credentials=$3,name=$4,snapshot_billing=$5 WHERE id=$1',[target,d.enabled??c.enabled,box.encrypt({username:d.username??credentials.username,password:d.password??credentials.password}),d.name??c.name,d.snapshotBilling??c.snapshot_billing]);
       if(d.payoutRate!==undefined) {
@@ -403,6 +405,8 @@ export async function createApp(db:DB,config:{encryptionKey:string;appUrl:string
       const rotating=!!a.proxy_id&&a.proxy_id!==d.proxyId;
       assert(!rotating||a.ownership_verified,'账号完成归属核实后才能更换固定代理',409);
       if(rotating) {
+        const [fixed]=await tx.query("SELECT b.id FROM bindings b JOIN connections c ON c.id=b.connection_id WHERE b.account_id=$1 AND c.provider='accedra' LIMIT 1",[accountId]);
+        assert(!fixed,'Platform X (✨ Anti-Ban) 的固定代理需由上游管理员修改并核对',409);
         const [active]=await tx.query(`SELECT j.id FROM jobs j WHERE j.state IN ('queued','running') AND
           (j.subject_id=$1 OR EXISTS(SELECT 1 FROM bindings b WHERE b.account_id=$1 AND b.id=j.subject_id)) LIMIT 1`,[accountId]);
         assert(!active,'账号仍有进行中的任务，请等待任务完成后再更换代理',409);
@@ -440,6 +444,7 @@ export async function createApp(db:DB,config:{encryptionKey:string;appUrl:string
     const [b]=await db.query(`SELECT b.*,a.owner_id,a.ownership_verified,c.provider FROM bindings b JOIN accounts a ON a.id=b.account_id JOIN connections c ON c.id=b.connection_id WHERE b.id=$1`,[bindingId]);
     assert(b && ((b.ownership_verified&&b.owner_id===req.user.id)||req.user.role==='owner'),'不能修改该账号代理',403);
     assert(b.provider!=='gatelink','Gatelink 需在上游修改代理，再由管理员核实');
+    assert(b.provider!=='accedra','此平台暂不支持代理变更');
     const p=await accountProxy(db,box,b.account_id);
     return enqueue(db,box,req.user.id,b.connection_id,'set_proxy',{bindingId,accountId:b.account_id,proxyId:p.id},d.key);
   });
@@ -502,8 +507,8 @@ export async function createApp(db:DB,config:{encryptionKey:string;appUrl:string
       assert(new Set(d.targets.map(t=>t.connectionId)).size===d.targets.length,'不能重复选择同一平台连接');
       const jobs=[];
       for(const t of d.targets) {
-        const [c]=await tx.query('SELECT id FROM connections WHERE id=$1 AND enabled=true',[t.connectionId]);assert(c,'连接不存在或已停用');
-        const payload={accountId,proxyId:proxy.id,options:t.options};
+        const [c]=await tx.query('SELECT id,provider FROM connections WHERE id=$1 AND enabled=true',[t.connectionId]);assert(c,'连接不存在或已停用');
+        const payload={accountId,proxyId:proxy.id,options:{...t.options,...(c.provider==='accedra'?{userAgent:String(req.headers['user-agent']??'').slice(0,512)}:{})}};
         const [previous]=await tx.query(`SELECT id FROM jobs WHERE requested_by=$1 AND connection_id=$2 AND kind='oauth_start' AND idempotency_key=$3`,[req.user.id,c.id,d.key]);
         if(previous){jobs.push(await enqueue(tx,box,req.user.id,c.id,'oauth_start',payload,d.key));continue;}
         const [b]=await tx.query('SELECT id FROM bindings WHERE account_id=$1 AND connection_id=$2',[accountId,c.id]);assert(!b,'此账号已在所选平台上号，请联系管理员核实归属',409);
@@ -519,7 +524,8 @@ export async function createApp(db:DB,config:{encryptionKey:string;appUrl:string
       const [b]=await tx.query(`SELECT b.*,a.owner_id,a.ownership_verified FROM bindings b JOIN accounts a ON a.id=b.account_id
         WHERE b.id=$1 FOR UPDATE OF a`,[bindingId]);
       assert(b?.ownership_verified&&(b.owner_id===req.user.id||req.user.role==='owner'),'仅账号本人或管理员可重新授权已核实归属的平台账号',403);
-      const [c]=await tx.query('SELECT id FROM connections WHERE id=$1 AND enabled=true',[b.connection_id]);assert(c,'连接不存在或已停用');
+      const [c]=await tx.query('SELECT id,provider FROM connections WHERE id=$1 AND enabled=true',[b.connection_id]);assert(c,'连接不存在或已停用');
+      assert(c.provider!=='accedra','此平台暂不支持重新授权');
       const proxy=await accountProxy(tx,box,b.account_id);
       const [previous]=await tx.query(`SELECT id FROM jobs WHERE requested_by=$1 AND connection_id=$2 AND kind='oauth_start' AND idempotency_key=$3`,[req.user.id,c.id,d.key]);
       const payload={accountId:b.account_id,bindingId:b.id,proxyId:proxy.id,options:d.options};
@@ -593,6 +599,8 @@ export async function createApp(db:DB,config:{encryptionKey:string;appUrl:string
     const bindingId=identifier.parse((req.params as Row).id),d=z.object({enabled:z.boolean(),key}).parse(req.body);
     const [b]=await db.query('SELECT b.*,a.owner_id,a.ownership_verified FROM bindings b JOIN accounts a ON a.id=b.account_id WHERE b.id=$1',[bindingId]);
     assert(b && ((b.ownership_verified&&b.owner_id===req.user.id)||req.user.role==='owner'),'不能操作该账号',403);
+    const [capability]=await db.query('SELECT provider FROM connections WHERE id=$1',[b.connection_id]);
+    assert(capability?.provider!=='accedra','Platform X (✨ Anti-Ban) 当前不支持通过 CCMAX 启停账号');
     if(d.enabled) {
       const p=await accountProxy(db,box,b.account_id),[c]=await db.query('SELECT provider FROM connections WHERE id=$1',[b.connection_id]);
       assert(c.provider!=='gatelink'||b.proxy_id===p.id,'请重新授权此平台，系统将自动应用账号固定代理',409);

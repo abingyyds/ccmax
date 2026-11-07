@@ -217,6 +217,10 @@ export async function migrate(db: DB) {
       await applyStaleLiveSnapshotReconciliation(tx);
       await tx.query('INSERT INTO migrations(version) VALUES (29)');
     }
+    if (!done.some(row=>Number(row.version)===30)) {
+      await extendProviders(tx,['connections','rates','invitation_rates']);
+      await tx.query('INSERT INTO migrations(version) VALUES (30)');
+    }
     // Compatibility upgrades that do not change the numbered migration
     // contract: verified account proxy rotation and local usage pausing are
     // safe to apply idempotently on every startup, including v20 databases.
